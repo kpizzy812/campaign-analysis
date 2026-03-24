@@ -1,0 +1,24 @@
+{
+  "model_type": "LGBMClassifier",
+  "trained_at": "2026-03-24 16:48:58",
+  "metrics": {
+    "roc_auc": 0.9403845037256863,
+    "precision": 0.9577765900587921,
+    "recall": 0.8381665107577175,
+    "f1": 0.8939885258169119
+  },
+  "features_numeric": [
+    "bid",
+    "daily_budget",
+    "hour",
+    "dow",
+    "budget_per_bid"
+  ],
+  "features_categorical": [
+    "geo",
+    "vertical",
+    "traffic_source",
+    "device",
+    "os"
+  ]
+}

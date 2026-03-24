@@ -1,0 +1,10 @@
+*.gz
+__pycache__/
+.git/
+.ipynb_checkpoints/
+mlruns/
+*.ipynb
+docs/
+tests/
+campaigns_synthetic.csv
+generate_data.py
