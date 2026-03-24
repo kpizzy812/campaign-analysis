@@ -1,4 +1,8 @@
 *.gz
-*.csv
 __pycache__/
 .ipynb_checkpoints/
+# Large/external CSVs
+marketing_campaign_dataset.csv
+campaigns_dataset.csv
+KAG_conversion_data.csv
+random_submission.csv
