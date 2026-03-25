@@ -12,6 +12,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from src.pipeline import NUMERIC_FEATURES, CATEGORICAL_FEATURES
+from src.creative_analyzer import extract_creative_features
+from src.creative_generator import generate_ad_variants
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -117,3 +119,126 @@ def predict_batch(items: list[CampaignInput]):
         for p, c in zip(probas, preds)
     ]
     return BatchOutput(predictions=predictions, count=len(predictions), latency_ms=round(latency, 1))
+
+
+# ============================================================
+# Creative Analysis & Generation Endpoints
+# ============================================================
+
+class CreativeAnalyzeInput(BaseModel):
+    ad_text: str
+
+
+class CreativeAnalyzeOutput(BaseModel):
+    features: dict
+    predicted_ctr_percentile: int
+    suggestions: list[str]
+
+
+class CreativeGenerateInput(BaseModel):
+    offer: str
+    geo: str
+    vertical: str
+    n_variants: int = Field(default=5, ge=1, le=10)
+
+
+class GeneratedVariant(BaseModel):
+    text: str
+    reasoning: str
+    predicted_ctr_percentile: int
+
+
+class CreativeGenerateOutput(BaseModel):
+    variants: list[GeneratedVariant]
+    count: int
+    latency_ms: float
+
+
+@app.post("/creatives/analyze", response_model=CreativeAnalyzeOutput)
+def analyze_creative(item: CreativeAnalyzeInput):
+    """Analyze ad text: extract features, predict CTR percentile, give suggestions."""
+    import anthropic as _anthropic
+
+    start = time.perf_counter()
+    client = _anthropic.Anthropic()
+
+    features = extract_creative_features(item.ad_text, client=client)
+
+    # Simple CTR percentile based on feature count
+    score = 0
+    suggestions = []
+    if features.get("has_number"):
+        score += 25
+    else:
+        suggestions.append("Добавьте конкретные числа (бонус, скидка, количество пользователей)")
+    if features.get("has_urgency"):
+        score += 25
+    else:
+        suggestions.append("Добавьте элемент срочности ('только сегодня', 'осталось 24ч')")
+    if features.get("has_social_proof"):
+        score += 20
+    else:
+        suggestions.append("Добавьте социальное доказательство ('10,000+ уже выиграли')")
+    if features.get("emotion") in ("excitement", "greed"):
+        score += 15
+    else:
+        suggestions.append("Усильте эмоциональный заряд (excitement или greed)")
+    if features.get("cta_strength", 0) >= 4:
+        score += 15
+    else:
+        suggestions.append("Усильте призыв к действию (CTA)")
+
+    latency = (time.perf_counter() - start) * 1000
+    logger.info(f"creatives/analyze | {latency:.0f}ms")
+
+    return CreativeAnalyzeOutput(
+        features=features,
+        predicted_ctr_percentile=min(score, 100),
+        suggestions=suggestions[:3],
+    )
+
+
+@app.post("/creatives/generate", response_model=CreativeGenerateOutput)
+def generate_creatives(item: CreativeGenerateInput):
+    """Generate N ad variants using few-shot from top performers."""
+    import anthropic as _anthropic
+    import pandas as _pd
+
+    start = time.perf_counter()
+    client = _anthropic.Anthropic()
+
+    # Load top performers from dataset
+    ads_path = Path("ads_dataset.csv")
+    if ads_path.exists():
+        ads_df = _pd.read_csv(ads_path)
+        vert_ads = ads_df[ads_df["vertical"] == item.vertical]
+        top_texts = vert_ads.nlargest(10, "ctr")["ad_text"].tolist()
+    else:
+        top_texts = []
+
+    variants_raw = generate_ad_variants(
+        offer=item.offer,
+        geo=item.geo,
+        vertical=item.vertical,
+        top_performers=top_texts,
+        n_variants=item.n_variants,
+        client=client,
+    )
+
+    variants = [
+        GeneratedVariant(
+            text=v.get("text", ""),
+            reasoning=v.get("reasoning", ""),
+            predicted_ctr_percentile=v.get("predicted_ctr_percentile", 50),
+        )
+        for v in variants_raw
+    ]
+
+    latency = (time.perf_counter() - start) * 1000
+    logger.info(f"creatives/generate | n={len(variants)} | {latency:.0f}ms")
+
+    return CreativeGenerateOutput(
+        variants=variants,
+        count=len(variants),
+        latency_ms=round(latency, 1),
+    )
