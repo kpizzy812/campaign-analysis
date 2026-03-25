@@ -11,23 +11,30 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+import os
+import redis as _redis
+
 from src.pipeline import NUMERIC_FEATURES, CATEGORICAL_FEATURES
 from src.creative_analyzer import extract_creative_features
 from src.creative_generator import generate_ad_variants
+from src.cached_predictor import CachedPredictor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 MODEL_PATH = Path('models/model.joblib')
 METADATA_PATH = Path('models/metadata.json')
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+CACHE_TTL = int(os.environ.get('CACHE_TTL', '300'))
 
 model = None
 metadata = None
+cached_predictor = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global model, metadata
+    global model, metadata, cached_predictor
     if MODEL_PATH.exists():
         model = joblib.load(MODEL_PATH)
         logger.info(f"Model loaded from {MODEL_PATH}")
@@ -37,6 +44,18 @@ async def lifespan(app: FastAPI):
     if METADATA_PATH.exists():
         with open(METADATA_PATH) as f:
             metadata = json.load(f)
+
+    # Init Redis cache
+    if model is not None:
+        try:
+            redis_client = _redis.from_url(REDIS_URL, decode_responses=True)
+            redis_client.ping()
+            cached_predictor = CachedPredictor(model, redis_client, ttl_seconds=CACHE_TTL)
+            logger.info(f"Redis cache connected: {REDIS_URL}, TTL={CACHE_TTL}s")
+        except _redis.ConnectionError:
+            logger.warning("Redis unavailable — running without cache")
+            cached_predictor = None
+
     yield
 
 
@@ -68,12 +87,14 @@ class BatchOutput(BaseModel):
 
 @app.get("/health")
 def health():
-    return {
+    result = {
         "status": "healthy" if model is not None else "no_model",
         "model_version": metadata.get("model_type", "unknown") if metadata else "unknown",
         "trained_at": metadata.get("trained_at", "unknown") if metadata else "unknown",
         "metrics": metadata.get("metrics", {}) if metadata else {},
+        "cache": cached_predictor.stats() if cached_predictor else {"status": "disabled"},
     }
+    return result
 
 
 def _prepare_input(items: list[CampaignInput]) -> pd.DataFrame:
@@ -89,13 +110,27 @@ def predict(item: CampaignInput):
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
+    features = item.model_dump()
+
+    # Use cached predictor if available
+    if cached_predictor is not None:
+        result = cached_predictor.predict(features)
+        logger.info(
+            "predict | geo=%s | prob=%.3f | cache=%s",
+            item.geo, result['probability'], result['cache_hit'],
+        )
+        return PredictionOutput(
+            probability=result['probability'], prediction=result['prediction'],
+        )
+
+    # Fallback: direct model call (no cache)
     start = time.perf_counter()
     df = _prepare_input([item])
     proba = model.predict_proba(df)[0, 1]
     pred = int(proba >= 0.5)
     latency = (time.perf_counter() - start) * 1000
 
-    logger.info(f"predict | geo={item.geo} | prob={proba:.3f} | {latency:.1f}ms")
+    logger.info("predict | geo=%s | prob=%.3f | no_cache | %.1fms", item.geo, proba, latency)
     return PredictionOutput(probability=round(float(proba), 4), prediction=pred)
 
 
