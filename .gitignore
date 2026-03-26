@@ -5,6 +5,7 @@ __pycache__/
 mlruns/
 mlflow.db
 extracted_features_100.csv
+course/
 # Large/external CSVs
 marketing_campaign_dataset.csv
 campaigns_dataset.csv
