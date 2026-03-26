@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ src/
 COPY models/ models/
+COPY ads_dataset.csv .
 
 EXPOSE 8000
 

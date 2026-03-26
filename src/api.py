@@ -97,6 +97,21 @@ def health():
     return result
 
 
+@app.get("/metrics")
+def metrics():
+    """Model metrics and training info."""
+    return {
+        "roc_auc": metadata.get("metrics", {}).get("roc_auc") if metadata else None,
+        "precision": metadata.get("metrics", {}).get("precision") if metadata else None,
+        "recall": metadata.get("metrics", {}).get("recall") if metadata else None,
+        "f1": metadata.get("metrics", {}).get("f1") if metadata else None,
+        "trained_at": metadata.get("trained_at") if metadata else None,
+        "model_type": metadata.get("model_type") if metadata else None,
+        "features_numeric": metadata.get("features_numeric") if metadata else None,
+        "features_categorical": metadata.get("features_categorical") if metadata else None,
+    }
+
+
 def _prepare_input(items: list[CampaignInput]) -> pd.DataFrame:
     """Convert Pydantic models to DataFrame with engineered features."""
     records = [item.model_dump() for item in items]

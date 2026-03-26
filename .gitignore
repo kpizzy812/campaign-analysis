@@ -1,6 +1,10 @@
 *.gz
 __pycache__/
 .ipynb_checkpoints/
+.env
+mlruns/
+mlflow.db
+extracted_features_100.csv
 # Large/external CSVs
 marketing_campaign_dataset.csv
 campaigns_dataset.csv
